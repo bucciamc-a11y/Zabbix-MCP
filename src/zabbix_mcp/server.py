@@ -90,19 +90,36 @@ def build_http_app(store: ConfigStore, mcp: FastMCP, svc: ZabbixService):
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(prog="zabbix-mcp", description="Zabbix 7.4 MCP server")
+    ap.add_argument("command", nargs="?", default="serve",
+                    choices=["serve", "check", "set-admin-password", "create-token", "show-config"],
+                    help="serve (default) | check Zabbix connection | set-admin-password (reads stdin) | "
+                         "create-token | show-config")
     ap.add_argument("--transport", choices=["stdio", "http"], help="override MCP_TRANSPORT")
     ap.add_argument("--host")
     ap.add_argument("--port", type=int)
     ap.add_argument("--config", help="config file (default: $DATA_DIR/config.json)")
-    ap.add_argument("--check", action="store_true", help="validate config and Zabbix connection, then exit")
+    ap.add_argument("--check", action="store_true", help="same as the 'check' command")
     return ap.parse_args(argv)
+
+
+def _admin_password(store: ConfigStore) -> int:
+    from .admin.auth import check_password_strength, hash_password
+    pw = sys.stdin.readline().rstrip("\n") if not sys.stdin.isatty() else __import__("getpass").getpass("New admin password: ")
+    if msg := check_password_strength(pw):
+        print(msg, file=sys.stderr)
+        return 2
+    store.update({"admin_password_hash": hash_password(pw)})
+    print("Admin password updated.", file=sys.stderr)
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     import asyncio
+    import json
     import os
 
     args = _parse_args(argv)
+    cmd = "check" if args.check else args.command
     if args.transport:
         os.environ["MCP_TRANSPORT"] = args.transport
     if args.host:
@@ -113,8 +130,16 @@ def main(argv: list[str] | None = None) -> int:
         store = ConfigStore(args.config)
         setup_logging(store.settings.log_level)
         s = store.settings
-        if args.check:
+        if cmd == "check":
             return asyncio.run(_check(store))
+        if cmd == "set-admin-password":
+            return _admin_password(store)
+        if cmd == "create-token":
+            print(store.add_mcp_token())  # the only intended stdout output: the token itself
+            return 0
+        if cmd == "show-config":
+            print(json.dumps(s.public_dict(), indent=2))
+            return 0
         mcp, svc = build_server(store)
         log.info("zabbix-mcp %s starting (%s, read_only=%s, toolsets=%s)", __version__, s.transport,
                  s.read_only, ",".join(s.toolsets))
