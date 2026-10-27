@@ -37,6 +37,8 @@ def test_auth_and_health(http_app):
         assert r.status_code == 401 and "www-authenticate" in r.headers
         r = c.post("/mcp", headers={**H, "Authorization": "Bearer wrong"}, json=INIT)
         assert r.status_code == 401
+        assert c.post("/mcp", headers={**H, "X-API-Key": TOKEN}, json=INIT).status_code == 200
+        assert c.post("/mcp", headers={**H, "X-API-Key": "nope"}, json=INIT).status_code == 401
         r = c.post("/mcp", headers={**H, "Authorization": f"Bearer {TOKEN}"}, json=INIT)
         assert r.status_code == 200
         assert r.json()["result"]["serverInfo"]["name"] == "zabbix"

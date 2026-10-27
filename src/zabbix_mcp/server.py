@@ -56,8 +56,10 @@ class BearerAuth:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or scope["path"].startswith(self.open):
             return await self.app(scope, receive, send)
-        auth = Request(scope).headers.get("authorization", "")
-        presented = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+        headers = Request(scope).headers
+        auth = headers.get("authorization", "")
+        # Some harnesses cannot set Authorization; accept X-API-Key as an equivalent carrier.
+        presented = auth[7:].strip() if auth[:7].lower() == "bearer " else headers.get("x-api-key", "").strip()
         ok = False
         if presented:
             h = hash_token(presented)
