@@ -32,6 +32,7 @@ class ZabbixService:
         self._confirms = guard.ConfirmStore()
         self._audit: Audit | None = None
         self._audit_path: str | None = None
+        self._bg: set = set()
 
     # -- plumbing ---------------------------------------------------------
     @property
@@ -46,7 +47,9 @@ class ZabbixService:
                 old = self._client
                 import asyncio
                 try:
-                    asyncio.get_running_loop().create_task(old.aclose())
+                    t = asyncio.get_running_loop().create_task(old.aclose())
+                    self._bg.add(t)  # keep a reference so the task is not garbage-collected mid-close
+                    t.add_done_callback(self._bg.discard)
                 except RuntimeError:
                     pass
             self._client = ZabbixClient(s, self._transport)

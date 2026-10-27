@@ -155,7 +155,7 @@ def test_password_change(admin):
     assert login(c, PW + "!")[0].status_code == 200
 
 
-def test_test_connection_uses_candidate_and_keeps_stored_token(admin):
+def test_test_connection_never_sends_stored_token_to_a_new_host(admin):
     c, _ = admin
     _, csrf = login(c)
     seen = []
@@ -167,11 +167,70 @@ def test_test_connection_uses_candidate_and_keeps_stored_token(admin):
 
     with respx.mock(assert_all_called=False) as router:
         router.post(url__regex=r"https://new\.example\.com/.*").mock(side_effect=handler)
-        r = c.post("/admin/api/test-connection", headers=H(csrf),
-                   json={"candidate": {"zabbix_url": "https://new.example.com", "zabbix_api_token": ""}})
-    d = r.json()
+        # URL changed, no new credentials: refused, nothing is sent anywhere
+        d = c.post("/admin/api/test-connection", headers=H(csrf),
+                   json={"candidate": {"zabbix_url": "https://new.example.com", "zabbix_api_token": ""}}).json()
+        assert d["ok"] is False and d["error"] == "credentials_required" and not seen
+        # with a new token it works and uses that token, not the stored one
+        d = c.post("/admin/api/test-connection", headers=H(csrf),
+                   json={"candidate": {"zabbix_url": "https://new.example.com", "zabbix_api_token": "new-tok"}}).json()
     assert d["ok"] and d["version"] == "7.4.0" and d["supported"] and d["can_read_hosts"]
-    assert seen[-1][1] == "Bearer tok-secret-123"  # blank candidate token falls back to stored one
+    assert seen[-1][1] == "Bearer new-tok"
+
+
+def test_test_connection_same_url_may_reuse_stored_token(admin):
+    c, _ = admin
+    _, csrf = login(c)
+    with respx.mock(assert_all_called=False) as router:
+        route = router.post(API).mock(side_effect=lambda r: httpx.Response(
+            200, json=ok("7.4.0" if json.loads(r.content)["method"] == "apiinfo.version" else [])))
+        d = c.post("/admin/api/test-connection", headers=H(csrf),
+                   json={"candidate": {"zabbix_url": "https://zbx.example.com/", "zabbix_api_token": ""}}).json()
+    assert d["ok"] and route.calls[-1].request.headers["authorization"] == "Bearer tok-secret-123"
+
+
+def test_malformed_json_bodies_are_400_not_500(admin):
+    c, _ = admin
+    _, csrf = login(c)
+    for path in ("settings", "test-connection", "tokens", "password"):
+        r = c.post(f"/admin/api/{path}", headers=H(csrf), content=b"{not json")
+        assert r.status_code == 400, path
+        r = c.post(f"/admin/api/{path}", headers=H(csrf), json=[1, 2])
+        assert r.status_code == 400, path
+    assert c.post("/admin/api/settings", headers=H(csrf), json={"changes": "x"}).status_code == 400
+    assert c.post("/admin/api/login", content=b"nope").status_code == 400
+
+
+def test_login_throttle_uses_proxy_appended_address_not_spoofable_prefix(admin):
+    c, _ = admin
+    for i in range(5):  # attacker rotates the leftmost (client-supplied) XFF entry
+        r = c.post("/admin/api/login", json={"password": "bad"},
+                   headers={"X-Forwarded-For": f"10.9.9.{i}, 203.0.113.7"})
+        assert r.status_code == 401
+    r = c.post("/admin/api/login", json={"password": PW},
+               headers={"X-Forwarded-For": "10.1.1.1, 203.0.113.7"})
+    assert r.status_code == 429  # same real client (203.0.113.7) is locked out
+    r = c.post("/admin/api/login", json={"password": PW}, headers={"X-Forwarded-For": "198.51.100.9"})
+    assert r.status_code == 200  # a different client is unaffected
+
+
+def test_password_change_signs_out_other_sessions(admin):
+    c, _ = admin
+    r, csrf = login(c)
+    old_cookie = c.cookies.get("zmcp_admin")
+    r = c.post("/admin/api/password", headers=H(csrf), json={"current": PW, "new": PW + "!"})
+    assert r.status_code == 200 and r.json()["csrf"]
+    assert c.get("/admin/api/state").status_code == 200  # this session was re-issued
+    c.cookies.clear()
+    c.cookies.set("zmcp_admin", old_cookie, path="/admin")
+    assert c.get("/admin/api/state").status_code == 401  # the old cookie no longer verifies
+
+
+def test_revoke_needs_a_specific_fingerprint(admin):
+    c, store = admin
+    _, csrf = login(c)
+    assert c.post("/admin/api/tokens", headers=H(csrf), json={"action": "revoke", "fingerprint": "a"}).status_code == 404
+    assert len(store.settings.mcp_token_hashes) == 1
 
 
 def test_test_connection_reports_failure(admin):

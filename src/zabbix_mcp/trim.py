@@ -79,10 +79,13 @@ def shrink(result: Any, max_chars: int) -> tuple[Any, dict[str, Any] | None]:
         used = 2
         for item in result:
             n = len(json.dumps(item, separators=(",", ":"), default=str)) + 1
-            if used + n > max_chars and out:
-                return out, {"truncated": True, "returned": len(out), "total": len(result),
-                             "hint": "Result too large: narrow the filters, request fewer "
-                                     "fields via 'output', or use a smaller 'limit'."}
+            if used + n > max_chars:
+                hint = ("Result too large: narrow the filters, request fewer "
+                        "fields via 'output', or use a smaller 'limit'.")
+                if not out:  # even the first item exceeds the cap: clip it rather than ignore the cap
+                    clipped = json.dumps(item, separators=(",", ":"), default=str)[:max_chars]
+                    return [clipped], {"truncated": True, "returned": 1, "total": len(result), "hint": hint}
+                return out, {"truncated": True, "returned": len(out), "total": len(result), "hint": hint}
             out.append(item)
             used += n
         return out, None

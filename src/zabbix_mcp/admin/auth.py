@@ -69,6 +69,16 @@ class Sessions:
                 self._key = key
         return self._key
 
+    def rotate(self) -> None:
+        """Replace the signing key: every previously issued cookie becomes invalid."""
+        self._key = secrets.token_bytes(32)
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self._path.with_suffix(".new")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(self._key)
+        os.replace(tmp, self._path)
+
     def issue(self, ttl: int = SESSION_TTL, now: float | None = None) -> tuple[str, str]:
         """Returns (cookie_value, csrf_token)."""
         csrf = secrets.token_urlsafe(16)

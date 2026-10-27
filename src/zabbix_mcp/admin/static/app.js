@@ -183,7 +183,8 @@ function tabServer(root) {
   p.append(h("h2", {}, "Admin password"), ...text("pw_cur", "Current password", "", { password: true }), ...text("pw_new", "New password (min 12 characters)", "", { password: true }),
     h("div", { class: "row" }, h("button", { onclick: async () => {
       const { ok, data } = await api("password", { current: val("pw_cur"), new: val("pw_new") });
-      flash(p, ok ? "ok" : "err", ok ? "Password changed." : data.message || "Failed");
+      if (ok && data.csrf) csrf = data.csrf; // the server re-issued our session (all others were signed out)
+      flash(p, ok ? "ok" : "err", ok ? "Password changed. Other sessions were signed out." : data.message || "Failed");
     } }, "Change password")));
   root.append(c, p);
 }

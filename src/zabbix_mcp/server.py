@@ -54,7 +54,8 @@ class BearerAuth:
         self.app, self.store, self.open = app, store, open_prefixes
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or scope["path"].startswith(self.open):
+        path = scope["path"] if scope["type"] == "http" else ""
+        if scope["type"] != "http" or any(path == p or path.startswith(p + "/") for p in self.open):
             return await self.app(scope, receive, send)
         headers = Request(scope).headers
         auth = headers.get("authorization", "")
@@ -169,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
             import uvicorn
             app = build_http_app(store, mcp, svc)
             uvicorn.run(app, host=s.host, port=s.port, log_level=s.log_level.lower(),
-                        proxy_headers=True, forwarded_allow_ips="*", access_log=False)
+                        proxy_headers=False, access_log=False)
         return 0
     except ConfigError as e:
         print(f"configuration error: {e.message}" + (f"\n  hint: {e.hint}" if e.hint else ""), file=sys.stderr)

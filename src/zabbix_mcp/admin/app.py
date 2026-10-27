@@ -4,6 +4,7 @@ All URLs are relative-safe so it works under a reverse-proxy path prefix."""
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import os
 import re
@@ -18,7 +19,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
 
 from .. import __version__
-from ..client import ZabbixClient
+from ..client import ZabbixClient, normalize_url
 from ..config import ConfigStore, Settings, hash_token
 from ..errors import ConfigError, ZabbixMCPError
 from ..registry import DEFAULT_BLOCKED_PATTERNS, DEFAULT_TOOLSETS, TOOLSETS, all_methods
@@ -86,14 +87,31 @@ class Admin:
         sess = self._session(request)
         if not sess:
             return self._json({"error": "unauthorized"}, 401)
-        if mutate and not (request.headers.get(CSRF_HEADER) == sess["csrf"]
+        if mutate and not (hmac.compare_digest(request.headers.get(CSRF_HEADER, ""), str(sess["csrf"]))
                            and request.headers.get("content-type", "").startswith("application/json")):
             return self._json({"error": "csrf", "message": "Missing or invalid CSRF token."}, 403)
         return sess
 
     @staticmethod
     def _client_key(request: Request) -> str:
+        """Throttle key. Behind Traefik every peer is the proxy, so use the right-most
+        X-Forwarded-For entry (the one the proxy appended; earlier entries are client-supplied
+        and spoofable)."""
+        xff = request.headers.get("x-forwarded-for", "")
+        if xff and (last := xff.split(",")[-1].strip()):
+            return last[:64]
         return request.client.host if request.client else "?"
+
+    @staticmethod
+    async def _body(request: Request) -> dict:
+        """Parsed JSON object body; raises ValueError (mapped to HTTP 400) when malformed."""
+        try:
+            body = await request.json()
+        except Exception:
+            raise ValueError("Request body must be a JSON object.") from None
+        if not isinstance(body, dict):
+            raise ValueError("Request body must be a JSON object.")
+        return body
 
     # -- routes ------------------------------------------------------------
     async def index(self, request: Request) -> Response:
@@ -116,9 +134,8 @@ class Admin:
         if wait := self.limiter.blocked(key):
             return self._json({"error": "locked", "message": f"Too many attempts. Try again in {wait}s."}, 429)
         try:
-            body = await request.json()
-            pw = str(body.get("password", ""))
-        except Exception:
+            pw = str((await self._body(request)).get("password", ""))
+        except ValueError:
             return self._json({"error": "bad_request"}, 400)
         stored = self.store.settings.admin_password_hash
         if not stored:
@@ -165,7 +182,12 @@ class Admin:
     async def save_settings(self, request: Request) -> JSONResponse:
         if isinstance(g := self._guard(request, True), JSONResponse):
             return g
-        changes = (await request.json()).get("changes", {})
+        try:
+            changes = (await self._body(request)).get("changes", {})
+        except ValueError as e:
+            return self._json({"error": "bad_request", "message": str(e)}, 400)
+        if not isinstance(changes, dict):
+            return self._json({"error": "bad_request", "message": "'changes' must be an object."}, 400)
         bad = set(changes) - EDITABLE
         if bad:
             return self._json({"error": "forbidden_keys", "message": f"Cannot edit: {sorted(bad)}"}, 400)
@@ -181,13 +203,27 @@ class Admin:
     async def test_connection(self, request: Request) -> JSONResponse:
         if isinstance(g := self._guard(request, True), JSONResponse):
             return g
-        cand = (await request.json()).get("candidate", {})
+        try:
+            cand = (await self._body(request)).get("candidate", {})
+        except ValueError as e:
+            return self._json({"error": "bad_request", "message": str(e)}, 400)
+        if not isinstance(cand, dict):
+            return self._json({"error": "bad_request", "message": "'candidate' must be an object."}, 400)
         cur = self.store.settings
         data = {k: getattr(cur, k) for k in ("zabbix_url", "zabbix_api_token", "zabbix_user",
                                              "zabbix_password", "verify_tls", "ca_bundle", "request_timeout")}
         for k, v in cand.items():
             if k in data and v not in (None, ""):
                 data[k] = v
+        # Never send the stored credentials to a different server than the one they belong to.
+        try:
+            moved = normalize_url(str(data["zabbix_url"])) != normalize_url(cur.zabbix_url)
+        except ConfigError:
+            moved = False
+        if moved and not any(cand.get(k) for k in ("zabbix_api_token", "zabbix_password")):
+            return self._json({"ok": False, "error": "credentials_required",
+                               "message": "The URL changed: enter the API token (or password) for the new "
+                                          "server; stored credentials are not sent to a different host."})
         probe = Settings(**{**cur.__dict__, **data})
         client = None
         try:
@@ -206,13 +242,17 @@ class Admin:
     async def tokens(self, request: Request) -> JSONResponse:
         if isinstance(g := self._guard(request, True), JSONResponse):
             return g
-        action = (await request.json()).get("action")
+        try:
+            body = await self._body(request)
+        except ValueError as e:
+            return self._json({"error": "bad_request", "message": str(e)}, 400)
+        action = body.get("action")
         if action == "create":
             token = self.store.add_mcp_token()
             return self._json({"ok": True, "token": token, "fingerprint": hash_token(token)[:10]})
         if action == "revoke":
-            fp = (await request.json()).get("fingerprint", "")
-            full = [h for h in self.store.settings.mcp_token_hashes if h.startswith(fp) and fp]
+            fp = str(body.get("fingerprint", ""))
+            full = [h for h in self.store.settings.mcp_token_hashes if len(fp) >= 8 and h.startswith(fp)]
             if not full:
                 return self._json({"error": "not_found"}, 404)
             self.store.revoke_mcp_tokens(full)
@@ -222,15 +262,33 @@ class Admin:
     async def password(self, request: Request) -> JSONResponse:
         if isinstance(g := self._guard(request, True), JSONResponse):
             return g
-        body = await request.json()
+        try:
+            body = await self._body(request)
+        except ValueError as e:
+            return self._json({"error": "bad_request", "message": str(e)}, 400)
+        key = self._client_key(request)
+        if wait := self.limiter.blocked(key):
+            return self._json({"error": "locked", "message": f"Too many attempts. Try again in {wait}s."}, 429)
         if not await asyncio.to_thread(verify_password, str(body.get("current", "")),
                                        self.store.settings.admin_password_hash):
+            self.limiter.fail(key)
             return self._json({"error": "invalid", "message": "Current password is wrong."}, 401)
+        self.limiter.success(key)
         new = str(body.get("new", ""))
         if msg := check_password_strength(new):
             return self._json({"error": "weak", "message": msg}, 400)
         self.store.update({"admin_password_hash": await asyncio.to_thread(hash_password, new)})
-        return self._json({"ok": True})
+        # A password change must invalidate every other session (cookies are stateless).
+        self.sessions.rotate()
+        cookie, csrf = self.sessions.issue()
+        resp = self._json({"ok": True, "csrf": csrf})
+        prefix = request.headers.get("x-forwarded-prefix", "").rstrip("/")
+        if not _PREFIX_OK.match(prefix):
+            prefix = ""
+        resp.set_cookie("zmcp_admin", cookie, max_age=8 * 3600, httponly=True, samesite="strict",
+                        secure=request.headers.get("x-forwarded-proto", request.url.scheme) == "https",
+                        path=(prefix + "/admin") or "/admin")
+        return resp
 
     async def audit(self, request: Request) -> JSONResponse:
         if isinstance(g := self._guard(request, False), JSONResponse):

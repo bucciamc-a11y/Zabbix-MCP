@@ -54,8 +54,10 @@ def register(mcp: FastMCP, svc: ZabbixService) -> None:
         """Current unresolved problems (newest first) with host, severity and age."""
         p: dict[str, Any] = {
             "output": ["eventid", "objectid", "name", "severity", "clock", "acknowledged", "opdata"],
-            "severities": _sev_list(min_severity), "suppressed": include_suppressed,
+            "severities": _sev_list(min_severity),
             "sortfield": ["eventid"], "sortorder": "DESC", "limit": limit}
+        if not include_suppressed:
+            p["suppressed"] = False  # omitting the parameter returns both; True would return ONLY suppressed
         if unacknowledged_only:
             p["acknowledged"] = False
         for key, kind, val in (("hostids", "host", host), ("groupids", "group", group)):
@@ -255,7 +257,7 @@ def register(mcp: FastMCP, svc: ZabbixService) -> None:
             numeric = vt in (0, 3)
             if use_trends and numeric:
                 rows = await call(svc, "trend.get", {
-                    "itemids": [it["itemid"]], "time_from": t_from, "limit": 5000,
+                    "itemids": [it["itemid"]], "time_from": t_from, "limit": 9000,  # 365d of hourly trends = 8760
                     "output": ["clock", "num", "value_min", "value_avg", "value_max"]})
                 pts = [{"t": iso(r["clock"]), "min": float(r["value_min"]), "avg": float(r["value_avg"]),
                         "max": float(r["value_max"])} for r in rows]

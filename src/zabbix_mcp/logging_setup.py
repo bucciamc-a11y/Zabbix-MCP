@@ -11,7 +11,7 @@ import sys
 import time
 from typing import Any
 
-_REDACT_KEYS = re.compile(r"(token|password|passwd|secret|auth|apikey|api_key|sessionid)", re.IGNORECASE)
+_REDACT_KEYS = re.compile(r"(token|password|passwd|passphrase|secret|auth|apikey|api_key|sessionid|psk|community|privatekey|private_key)", re.IGNORECASE)
 _BEARER = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+")
 _ZMCP = re.compile(r"zmcp_[A-Za-z0-9_-]+")
 MASK = "***"
@@ -59,8 +59,10 @@ class Audit:
     def __init__(self, path: str = ""):
         self._log = logging.getLogger("zabbix_mcp.audit")
         self._log.propagate = not path
+        for old in list(self._log.handlers):  # path changed or cleared: stop writing to the old file
+            self._log.removeHandler(old)
+            old.close()
         if path:
-            self._log.handlers.clear()
             fh = logging.FileHandler(path)
             fh.setFormatter(logging.Formatter("%(message)s"))
             self._log.addHandler(fh)

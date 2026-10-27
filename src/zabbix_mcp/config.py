@@ -77,6 +77,8 @@ class Settings:
             raise ConfigError(f"unknown toolsets {bad}; valid: {sorted(TOOLSETS)}")
         if not 1 <= self.port <= 65535:
             raise ConfigError("port out of range")
+        if self.request_timeout <= 0:
+            raise ConfigError("request_timeout must be greater than 0")
         if self.default_limit < 1 or self.max_response_chars < 1000:
             raise ConfigError("default_limit must be >=1 and max_response_chars >=1000")
 
@@ -180,6 +182,7 @@ class ConfigStore:
         """Validate and persist changes (only known keys). Blank secret values are ignored
         so the UI can leave them untouched."""
         with self._lock:
+            self.reload()  # never overwrite changes another process (CLI, installer) saved meanwhile
             current = asdict(self._settings)
             for k, v in changes.items():
                 if k not in _TYPES:

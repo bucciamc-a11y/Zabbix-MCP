@@ -83,6 +83,10 @@ def register(mcp: FastMCP, svc: ZabbixService, enabled_toolsets: list[str]) -> N
         confirm_token: Annotated[str | None, Field(description="Token from the preview call (writes)")] = None,
     ):
         """Escape hatch: call any 7.4 API method. Same safety rules (read-only, blocklist, confirmation)."""
+        home = toolset_for_group(method.split(".", 1)[0])
+        if home and home not in svc.settings.toolsets:
+            raise BlockedError(f"'{method}' belongs to the '{home}' toolset, which is not enabled. "
+                               "An administrator can enable it in the settings.")
         return await svc.execute(method, params, confirm_token=confirm_token)
 
     for ts in enabled_toolsets:

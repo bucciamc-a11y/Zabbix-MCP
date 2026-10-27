@@ -89,6 +89,8 @@ def expand_fields(fields: Any) -> list[dict[str, Any]]:
             for i, v in enumerate(val):
                 walk(f"{path}.{i}", v)
         else:
+            if isinstance(val, bool):  # Zabbix stores flags as integers
+                val = int(val)
             out.append({"type": _ftype(path, val), "name": path, "value": val})
 
     walk("", fields)
@@ -161,8 +163,16 @@ def build_widget(spec: dict[str, Any], existing: list[dict]) -> dict[str, Any]:
     w.setdefault("view_mode", 0)
     fields = expand_fields(spec.get("fields", {}))
     if w.get("type") in NEEDS_REFERENCE and not any(f["name"] == "reference" for f in fields):
-        digest = hashlib.sha1(json.dumps(spec, sort_keys=True, default=str).encode()).digest()
-        ref = "".join(string.ascii_uppercase[b % 26] for b in digest[:5])
+        used = {f.get("value") for ew in existing for f in ew.get("fields", [])
+                if isinstance(f, dict) and f.get("name") == "reference"}
+        salt = 0
+        while True:  # deterministic, but never collides with another widget on the dashboard
+            seed = json.dumps(spec, sort_keys=True, default=str) + (str(salt) if salt else "")
+            digest = hashlib.sha1(seed.encode()).digest()
+            ref = "".join(string.ascii_uppercase[b % 26] for b in digest[:5])
+            if ref not in used:
+                break
+            salt += 1
         fields.append({"type": 1, "name": "reference", "value": ref})
     w["fields"] = fields
     if "x" not in w or "y" not in w:
@@ -282,8 +292,12 @@ def register(mcp: FastMCP, svc: ZabbixService) -> None:
             if not widget_name:
                 raise BlockedError("remove_widget needs 'widget_name'.")
             kept = [w for w in pg_widgets if w.get("name") != widget_name]
-            if len(kept) == len(pg_widgets):
+            removed = len(pg_widgets) - len(kept)
+            if removed == 0:
                 raise BlockedError(f"No widget named '{widget_name}' on page {page}.")
+            if removed > 1:
+                raise BlockedError(f"{removed} widgets are named '{widget_name}' on page {page}; "
+                                   "rename them or use replace_pages so the wrong one is not removed.")
             pg_widgets = kept
         if issues := check_layout(pg_widgets):
             raise BlockedError("Invalid layout: " + "; ".join(issues))

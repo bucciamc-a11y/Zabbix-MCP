@@ -16,7 +16,7 @@ from .registry import get_method
 CONFIRM_TTL = 300
 _MAX_PENDING = 500
 _DESTRUCTIVE_ACTIONS = {"delete", "deleteglobal", "clear", "massremove", "replacehostinterfaces",
-                        "execute", "import", "resettotp", "unblock"}
+                        "execute", "import", "resettotp", "unblock", "massupdate", "propagate"}
 
 
 @dataclass
