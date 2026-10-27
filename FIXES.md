@@ -39,7 +39,13 @@ A full read-through of the server, admin UI backend, tools and installer. Every 
 * Dockerfile builds the virtualenv at its runtime path (`/app`); the previous layout produced an image whose entry point could not start (found by CI).
 * Removed a stray wheel file that had been committed.
 
+## Second pass: simplification and small additions
+* Admin API: one `_in()` helper does authentication, CSRF and JSON-body parsing for every route (about 25 fewer lines, and every route now gets the same checks).
+* Removed dead code (`ZabbixClient.configured_auth`, `ZABBIX_TARGET_VERSION`) and simplified a few expressions in `dashboards.py`.
+* Audit log is size-rotated (5 MB x 3) so it cannot fill the VPS disk.
+* Read calls are retried on 502/503/504 from a proxy in front of Zabbix; writes are never retried.
+* `python -m zabbix_mcp` works (handy for stdio clients that launch a module).
+
 ## Known limitations (deliberately not changed)
 * Admin sessions are stateless: *Sign out* clears the browser cookie but cannot revoke a copied cookie (it expires after 8 h, or on password change).
 * `search`-based host lookups match substrings; use exact names or `*` wildcards deliberately.
-* Reads are retried only on network errors, not on 502/503 from an intermediate proxy.

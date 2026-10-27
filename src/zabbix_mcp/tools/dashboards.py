@@ -104,7 +104,7 @@ def _ftype(path: str, val: Any) -> int:
         return 1
     if last in FIELD_TYPES:
         return FIELD_TYPES[last]
-    if isinstance(val, bool) or isinstance(val, int):
+    if isinstance(val, int):
         return 0
     return 1
 
@@ -135,8 +135,8 @@ def _overlap(a: dict, b: dict) -> bool:
 
 def find_free_slot(widgets: list[dict], width: int, height: int) -> tuple[int, int] | None:
     """First (x, y) scanning rows top-to-bottom where the box fits without overlap."""
-    for y in range(0, GRID_H - height + 1):
-        for x in range(0, GRID_W - width + 1):
+    for y in range(GRID_H - height + 1):
+        for x in range(GRID_W - width + 1):
             cand = {"x": x, "y": y, "width": width, "height": height}
             if not any(_overlap(cand, w) for w in widgets):
                 return x, y
@@ -175,12 +175,11 @@ def build_widget(spec: dict[str, Any], existing: list[dict]) -> dict[str, Any]:
             salt += 1
         fields.append({"type": 1, "name": "reference", "value": ref})
     w["fields"] = fields
-    if "x" not in w or "y" not in w:
-        if isinstance(w.get("width"), int) and isinstance(w.get("height"), int):
-            slot = find_free_slot(existing, w["width"], w["height"])
-            if slot is None:
-                raise BlockedError("No free space on this dashboard page; use another page or resize.")
-            w["x"], w["y"] = slot
+    if ("x" not in w or "y" not in w) and isinstance(w["width"], int) and isinstance(w["height"], int):
+        slot = find_free_slot(existing, w["width"], w["height"])
+        if slot is None:
+            raise BlockedError("No free space on this dashboard page; use another page or resize.")
+        w["x"], w["y"] = slot
     return w
 
 

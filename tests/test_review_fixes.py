@@ -4,10 +4,12 @@ import json
 import logging
 import time
 
+import httpx
 import respx
 from mcp.shared.memory import create_connected_server_and_client_session as connect
 from starlette.testclient import TestClient
 
+from tests.conftest import API, ok
 from tests.fake import FakeZabbix
 from zabbix_mcp.config import ConfigStore
 from zabbix_mcp.guard import evaluate
@@ -148,3 +150,32 @@ def test_request_timeout_must_be_positive(make_store):
     from zabbix_mcp.errors import ConfigError
     with pytest.raises(ConfigError):
         make_store().update({"request_timeout": 0})
+
+
+async def test_reads_retry_on_gateway_errors_but_writes_do_not(make_store):
+    from zabbix_mcp.client import ZabbixClient
+    calls = []
+
+    def handler(request):
+        calls.append(json.loads(request.content)["method"])
+        return httpx.Response(503) if len(calls) == 1 else httpx.Response(200, json=ok([{"hostid": "1"}]))
+
+    with respx.mock() as router:
+        router.post(API).mock(side_effect=handler)
+        c = ZabbixClient(make_store().settings)
+        assert await c.call("host.get", {}) == [{"hostid": "1"}] and len(calls) == 2
+        calls.clear()
+        from zabbix_mcp.errors import ZabbixHTTPError
+        try:
+            await c.call("host.update", {})  # 503 on a write: no blind retry
+        except ZabbixHTTPError:
+            pass
+        assert len(calls) == 1
+        await c.aclose()
+
+
+def test_python_dash_m_entrypoint():
+    import subprocess
+    import sys
+    out = subprocess.run([sys.executable, "-m", "zabbix_mcp", "--help"], capture_output=True, text=True)
+    assert out.returncode == 0 and "Zabbix 7.4 MCP server" in out.stdout

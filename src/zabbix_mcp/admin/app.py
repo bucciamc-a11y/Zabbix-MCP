@@ -83,14 +83,27 @@ class Admin:
     def _session(self, request: Request) -> dict | None:
         return self.sessions.verify(request.cookies.get("zmcp_admin"))
 
-    def _guard(self, request: Request, mutate: bool) -> JSONResponse | dict:
+    async def _in(self, request: Request, mutate: bool = True) -> tuple[dict, JSONResponse | None]:
+        """Authenticate; for mutating calls also check CSRF and parse the JSON object body.
+        Returns (body, None) or ({}, error_response)."""
         sess = self._session(request)
         if not sess:
-            return self._json({"error": "unauthorized"}, 401)
-        if mutate and not (hmac.compare_digest(request.headers.get(CSRF_HEADER, ""), str(sess["csrf"]))
-                           and request.headers.get("content-type", "").startswith("application/json")):
-            return self._json({"error": "csrf", "message": "Missing or invalid CSRF token."}, 403)
-        return sess
+            return {}, self._json({"error": "unauthorized"}, 401)
+        if not mutate:
+            return {}, None
+        if not (hmac.compare_digest(request.headers.get(CSRF_HEADER, ""), str(sess["csrf"]))
+                and request.headers.get("content-type", "").startswith("application/json")):
+            return {}, self._json({"error": "csrf", "message": "Missing or invalid CSRF token."}, 403)
+        return await self._json_body(request)
+
+    async def _json_body(self, request: Request) -> tuple[dict, JSONResponse | None]:
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        if not isinstance(body, dict):
+            return {}, self._json({"error": "bad_request", "message": "Request body must be a JSON object."}, 400)
+        return body, None
 
     @staticmethod
     def _client_key(request: Request) -> str:
@@ -101,17 +114,6 @@ class Admin:
         if xff and (last := xff.split(",")[-1].strip()):
             return last[:64]
         return request.client.host if request.client else "?"
-
-    @staticmethod
-    async def _body(request: Request) -> dict:
-        """Parsed JSON object body; raises ValueError (mapped to HTTP 400) when malformed."""
-        try:
-            body = await request.json()
-        except Exception:
-            raise ValueError("Request body must be a JSON object.") from None
-        if not isinstance(body, dict):
-            raise ValueError("Request body must be a JSON object.")
-        return body
 
     # -- routes ------------------------------------------------------------
     async def index(self, request: Request) -> Response:
@@ -133,10 +135,10 @@ class Admin:
         key = self._client_key(request)
         if wait := self.limiter.blocked(key):
             return self._json({"error": "locked", "message": f"Too many attempts. Try again in {wait}s."}, 429)
-        try:
-            pw = str((await self._body(request)).get("password", ""))
-        except ValueError:
-            return self._json({"error": "bad_request"}, 400)
+        body, bad = await self._json_body(request)
+        if bad:
+            return bad
+        pw = str(body.get("password", ""))
         stored = self.store.settings.admin_password_hash
         if not stored:
             return self._json({"error": "not_configured",
@@ -168,8 +170,8 @@ class Admin:
         return self._json({"authenticated": True, "csrf": sess["csrf"]})
 
     async def state(self, request: Request) -> JSONResponse:
-        if isinstance(g := self._guard(request, False), JSONResponse):
-            return g
+        if bad := (await self._in(request, False))[1]:
+            return bad
         s = self.store.settings
         tokens = [h[:10] for h in s.mcp_token_hashes]
         return self._json({
@@ -180,12 +182,10 @@ class Admin:
             "endpoint": (s.public_url.rstrip("/") + "/mcp") if s.public_url else ""})
 
     async def save_settings(self, request: Request) -> JSONResponse:
-        if isinstance(g := self._guard(request, True), JSONResponse):
-            return g
-        try:
-            changes = (await self._body(request)).get("changes", {})
-        except ValueError as e:
-            return self._json({"error": "bad_request", "message": str(e)}, 400)
+        body, bad = await self._in(request)
+        if bad:
+            return bad
+        changes = body.get("changes", {})
         if not isinstance(changes, dict):
             return self._json({"error": "bad_request", "message": "'changes' must be an object."}, 400)
         bad = set(changes) - EDITABLE
@@ -201,12 +201,10 @@ class Admin:
         return self._json({"ok": True, "restart_required": restart, "settings": after.public_dict()})
 
     async def test_connection(self, request: Request) -> JSONResponse:
-        if isinstance(g := self._guard(request, True), JSONResponse):
-            return g
-        try:
-            cand = (await self._body(request)).get("candidate", {})
-        except ValueError as e:
-            return self._json({"error": "bad_request", "message": str(e)}, 400)
+        body, bad = await self._in(request)
+        if bad:
+            return bad
+        cand = body.get("candidate", {})
         if not isinstance(cand, dict):
             return self._json({"error": "bad_request", "message": "'candidate' must be an object."}, 400)
         cur = self.store.settings
@@ -240,12 +238,9 @@ class Admin:
                 await client.aclose()
 
     async def tokens(self, request: Request) -> JSONResponse:
-        if isinstance(g := self._guard(request, True), JSONResponse):
-            return g
-        try:
-            body = await self._body(request)
-        except ValueError as e:
-            return self._json({"error": "bad_request", "message": str(e)}, 400)
+        body, bad = await self._in(request)
+        if bad:
+            return bad
         action = body.get("action")
         if action == "create":
             token = self.store.add_mcp_token()
@@ -260,12 +255,9 @@ class Admin:
         return self._json({"error": "bad_action"}, 400)
 
     async def password(self, request: Request) -> JSONResponse:
-        if isinstance(g := self._guard(request, True), JSONResponse):
-            return g
-        try:
-            body = await self._body(request)
-        except ValueError as e:
-            return self._json({"error": "bad_request", "message": str(e)}, 400)
+        body, bad = await self._in(request)
+        if bad:
+            return bad
         key = self._client_key(request)
         if wait := self.limiter.blocked(key):
             return self._json({"error": "locked", "message": f"Too many attempts. Try again in {wait}s."}, 429)
@@ -291,8 +283,8 @@ class Admin:
         return resp
 
     async def audit(self, request: Request) -> JSONResponse:
-        if isinstance(g := self._guard(request, False), JSONResponse):
-            return g
+        if bad := (await self._in(request, False))[1]:
+            return bad
         path = self.store.settings.audit_log
         if not path:
             return self._json({"configured": False, "lines": []})
@@ -300,8 +292,8 @@ class Admin:
         return self._json({"configured": True, "lines": lines})
 
     async def restart(self, request: Request) -> JSONResponse:
-        if isinstance(g := self._guard(request, True), JSONResponse):
-            return g
+        if bad := (await self._in(request))[1]:
+            return bad
         loop = asyncio.get_running_loop()
         loop.call_later(1.0, lambda: os.kill(os.getpid(), signal.SIGTERM))
         return self._json({"ok": True, "message": "Restarting; the container supervisor brings it back."})

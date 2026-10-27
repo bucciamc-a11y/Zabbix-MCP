@@ -82,10 +82,6 @@ class ZabbixClient:
     async def aclose(self) -> None:
         await self._http.aclose()
 
-    @property
-    def configured_auth(self) -> bool:
-        return bool(self._token or (self._s.zabbix_user and self._s.zabbix_password))
-
     async def version(self) -> str:
         if self._version is None:
             self._version = str(await self.call("apiinfo.version", {}, retry=True))
@@ -120,7 +116,8 @@ class ZabbixClient:
         for attempt in range(attempts):
             try:
                 resp = await self._http.post(self.url, json=body, headers=headers)
-                break
+                if resp.status_code not in (502, 503, 504) or attempt + 1 == attempts:
+                    break  # a proxy in front of Zabbix being briefly down is worth retrying for reads
             except httpx.TimeoutException as e:
                 if attempt + 1 == attempts:
                     raise ZabbixTimeoutError(

@@ -9,6 +9,7 @@ import logging
 import re
 import sys
 import time
+from logging.handlers import RotatingFileHandler
 from typing import Any
 
 _REDACT_KEYS = re.compile(r"(token|password|passwd|passphrase|secret|auth|apikey|api_key|sessionid|psk|community|privatekey|private_key)", re.IGNORECASE)
@@ -63,7 +64,7 @@ class Audit:
             self._log.removeHandler(old)
             old.close()
         if path:
-            fh = logging.FileHandler(path)
+            fh = RotatingFileHandler(path, maxBytes=5_000_000, backupCount=3)  # bounded disk use
             fh.setFormatter(logging.Formatter("%(message)s"))
             self._log.addHandler(fh)
             self._log.setLevel(logging.INFO)
