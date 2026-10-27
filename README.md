@@ -46,3 +46,7 @@ stdio mode (`MCP_TRANSPORT=stdio`) keeps stdout clean for the protocol.
 Unit/integration tests run against a fake Zabbix. CI additionally builds the Docker image and runs a contract test
 against a real Zabbix 7.4 stack (`scripts/live_check.py --write`). Run `live_check.py` against your own instance after
 installing to validate the curated tools end to end.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
