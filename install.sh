@@ -482,7 +482,12 @@ compose() { docker compose --project-directory "$INSTALL_DIR" -f "$INSTALL_DIR/d
 
 build_image() {
   info "building the container image (first build takes a few minutes)"
-  compose build --quiet >/dev/null || die "image build failed; run: docker compose -f $INSTALL_DIR/docker-compose.yml build"
+  local log; log=$(mktemp)
+  if ! compose build >"$log" 2>&1; then
+    tail -n 25 "$log" >&2; rm -f "$log"
+    die "image build failed (last lines above); retry with: docker compose -f $INSTALL_DIR/docker-compose.yml build"
+  fi
+  rm -f "$log"
   ok "image built"
 }
 
