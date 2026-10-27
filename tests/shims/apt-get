@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-echo "apt-get $*" >>"${SHIM_DIR:?}/docker.log"; exit 0
+echo "apt-get $*" >>"${SHIM_DIR:?}/docker.log"; [[ -z ${SHIM_APT_OUT:-} ]] || echo "$SHIM_APT_OUT"; exit 0

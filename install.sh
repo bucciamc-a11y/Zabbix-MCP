@@ -133,12 +133,24 @@ check_os() {
   fi
 }
 
+# apt_update - refresh package indexes; a wrong system clock makes every signature "not live yet"
+apt_update() {
+  local out rc=0
+  out=$(apt-get update 2>&1) || rc=$?
+  if grep -qiE "not live until|not yet valid|not valid yet" <<<"$out"; then
+    die "the system clock ($(date -u +%Y-%m-%dT%H:%M:%SZ)) is behind: apt rejects repository signatures that are not valid yet.
+       Sync the clock, then re-run:  sudo timedatectl set-ntp true   (or: sudo apt-get install -y systemd-timesyncd)
+       Check it with 'timedatectl' (System clock synchronized: yes)."
+  fi
+  if ((rc)); then printf '%s\n' "$out" >&2; die "apt-get update failed (exit $rc)"; fi
+}
+
 install_prereqs() {
   local missing=() c
   for c in curl jq tar; do command -v "$c" >/dev/null || missing+=("$c"); done
   if ((${#missing[@]})); then
     info "installing prerequisites: ${missing[*]}"
-    apt-get update -qq
+    apt_update
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ca-certificates "${missing[@]}" >/dev/null
   fi
 }
@@ -151,14 +163,14 @@ install_docker() {
   info "installing Docker Engine from Docker's official apt repository"
   # shellcheck disable=SC1091
   . /etc/os-release  # Docker repository setup only runs on a real Debian host
-  apt-get update -qq
+  apt_update
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ca-certificates curl gnupg >/dev/null
   install -m 0755 -d /etc/apt/keyrings
   curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
   chmod a+r /etc/apt/keyrings/docker.asc
   printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian %s stable\n' \
     "$(dpkg --print-architecture)" "$VERSION_CODENAME" >/etc/apt/sources.list.d/docker.list
-  apt-get update -qq
+  apt_update
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker-ce docker-ce-cli containerd.io \
     docker-buildx-plugin docker-compose-plugin >/dev/null
   systemctl enable --now docker >/dev/null 2>&1 || true

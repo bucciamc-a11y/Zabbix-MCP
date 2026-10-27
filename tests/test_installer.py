@@ -210,3 +210,22 @@ def test_validators():
     assert helper("valid_name", "websecure")[1] == 0 and helper("valid_name", "a;b")[1] != 0
     out, rc = helper("random_password")
     assert rc == 0 and len(out) == 32 and out.isalnum()
+
+
+def _apt_update(env, apt_out):
+    e = {k: v for k, v in env.items() if k != "_tmp"}
+    e["ZMCP_SOURCE_ONLY"] = "1"
+    e["SHIM_APT_OUT"] = apt_out
+    return subprocess.run(["bash", "-c", f'source "{ROOT}/install.sh"; apt_update; echo done'], env=e,
+                          capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=30)
+
+
+def test_apt_update_explains_a_wrong_system_clock(env):
+    r = _apt_update(env, "W: OpenPGP signature verification failed: ... Not live until 2026-10-27T20:43:58Z")
+    assert r.returncode != 0 and "clock" in r.stderr and "timedatectl set-ntp true" in r.stderr
+    assert "done" not in r.stdout
+
+
+def test_apt_update_passes_on_clean_output(env):
+    r = _apt_update(env, "Hit:1 http://deb.debian.org/debian trixie InRelease")
+    assert r.returncode == 0 and "done" in r.stdout
