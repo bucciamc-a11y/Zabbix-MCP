@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Test double for curl: fake Zabbix JSON-RPC and fake MCP endpoint.
+[[ -n ${SHIM_TLS_FAIL:-} ]] && exit 60
+cfg=""; if [[ " $* " == *" -K - "* ]]; then cfg=$(cat); fi
+body=""; prev=""; wcode=0
+for a in "$@"; do [[ $prev == -d ]] && body=$a; [[ $a == -w ]] && wcode=1; prev=$a; done
+printf '%s\n' "$cfg" >>"${SHIM_DIR:?}/curl.cfg"
+if [[ $cfg == *api_jsonrpc.php* ]]; then
+  case "$body" in
+    *apiinfo.version*) echo "{\"jsonrpc\":\"2.0\",\"result\":\"${SHIM_ZBX_VERSION:-7.4.2}\",\"id\":1}" ;;
+    *host.get*) if [[ -n ${SHIM_BAD_TOKEN:-} ]]; then echo '{"jsonrpc":"2.0","error":{"code":-32602,"message":"Invalid params.","data":"Not authorized."},"id":1}'; else echo '{"jsonrpc":"2.0","result":[{"hostid":"1"}],"id":1}'; fi ;;
+  esac
+  exit 0
+fi
+if ((wcode)); then printf '%s' "${SHIM_MCP_CODE:-200}"; exit 0; fi
+exit 0

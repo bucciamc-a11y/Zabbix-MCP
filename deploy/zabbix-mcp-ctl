@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# zabbix-mcp-ctl - day-to-day management of the Zabbix MCP container.
+set -Eeuo pipefail
+INSTALL_DIR="/opt/zabbix-mcp"
+COMPOSE=(docker compose --project-directory "$INSTALL_DIR" -f "$INSTALL_DIR/docker-compose.yml")
+
+usage() {
+  cat <<USAGE
+Usage: zabbix-mcp-ctl <command>
+
+  status               container state, health and configuration summary
+  logs [-f]            show (follow) container logs
+  start | stop | restart
+  check                verify the stored Zabbix URL/token from inside the container
+  config               show settings (secrets hidden)
+  token                create an additional MCP access token (shown once)
+  set-admin-password   change the web admin UI password
+  reconfigure          re-run the setup questions with current answers as defaults
+  upgrade              pull the latest code (git) and rebuild, keeping configuration
+  uninstall            remove the container (asks about data)
+USAGE
+}
+
+require_install() { [[ -f $INSTALL_DIR/docker-compose.yml ]] || { echo "no installation in $INSTALL_DIR" >&2; exit 1; }; }
+
+cmd=${1:-help}
+shift || true
+case $cmd in
+  status)
+    require_install
+    docker ps --filter name=^zabbix-mcp$ --format 'container: {{.Names}}  {{.Status}}'
+    echo "health: $(docker inspect -f '{{.State.Health.Status}}' zabbix-mcp 2>/dev/null || echo not-running)"
+    docker exec zabbix-mcp zabbix-mcp show-config 2>/dev/null \
+      | grep -E '"(zabbix_url|read_only|confirm_writes|toolsets|public_url|admin_enabled|mcp_token_count)"' || true
+    ;;
+  logs) require_install; "${COMPOSE[@]}" logs --tail 100 "$@" zabbix-mcp ;;
+  start|stop|restart) require_install; "${COMPOSE[@]}" "$cmd" ;;
+  check) require_install; docker exec zabbix-mcp zabbix-mcp check ;;
+  config) require_install; docker exec zabbix-mcp zabbix-mcp show-config ;;
+  token)
+    require_install
+    echo "New MCP access token (shown once):"
+    docker exec zabbix-mcp zabbix-mcp create-token
+    ;;
+  set-admin-password)
+    require_install
+    if [[ -t 0 ]]; then docker exec -it zabbix-mcp zabbix-mcp set-admin-password
+    else docker exec -i zabbix-mcp zabbix-mcp set-admin-password; fi
+    ;;
+  reconfigure) require_install; exec "$INSTALL_DIR/src/install.sh" --reconfigure "$@" ;;
+  upgrade)
+    require_install
+    src=$(cat "$INSTALL_DIR/.source" 2>/dev/null || true)
+    [[ -n $src && -x $src/install.sh ]] || { echo "original checkout ($src) not found; run install.sh --upgrade from a fresh clone" >&2; exit 1; }
+    if git -C "$src" rev-parse --git-dir >/dev/null 2>&1; then git -C "$src" pull --ff-only; fi
+    exec "$src/install.sh" --upgrade "$@"
+    ;;
+  uninstall) require_install; exec "$INSTALL_DIR/src/install.sh" --uninstall "$@" ;;
+  help|-h|--help) usage ;;
+  *) usage >&2; exit 2 ;;
+esac

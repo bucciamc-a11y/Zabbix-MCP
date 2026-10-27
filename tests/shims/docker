@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Test double for docker: logs every call and emulates the few subcommands install.sh uses.
+LOG="${SHIM_DIR:?}/docker.log"
+printf '%s\n' "$*" >>"$LOG"
+case "$1" in
+  --version) echo "Docker version 29.0.0, build test"; exit 0 ;;
+  compose)
+    [[ $2 == version ]] && { echo "Docker Compose version v2.40.0"; exit 0; }
+    exit 0 ;;
+  ps) [[ ${SHIM_TRAEFIK:-} == 1 ]] && printf 'traefik\ttraefik:v3.1\n'; exit 0 ;;
+  inspect)
+    case "$*" in
+      *Health.Status*) echo healthy ;;
+      *Networks*) echo "proxy " ;;
+      *Args*) echo "--entrypoints.web.address=:80 --entrypoints.websecure.address=:443 --certificatesresolvers.le.acme.tlschallenge=true" ;;
+    esac; exit 0 ;;
+  run)
+    envf=""; prev=""
+    for a in "$@"; do [[ $prev == --env-file ]] && envf=$a; prev=$a; done
+    [[ -n $envf ]] && cp "$envf" "$SHIM_DIR/init.env"
+    cat >"$SHIM_DIR/init.stdin"
+    echo "zmcp_faketoken1234567890"; exit 0 ;;
+  exec) exit "${SHIM_CHECK_RC:-0}" ;;
+  logs|rmi) exit 0 ;;
+esac
+exit 0

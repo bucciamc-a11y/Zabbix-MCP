@@ -14,7 +14,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import __version__, prompts
-from .config import ConfigStore, hash_token
+from .config import ConfigStore, env_changes, hash_token
 from .errors import ConfigError
 from .logging_setup import setup_logging
 from .service import ZabbixService
@@ -91,9 +91,11 @@ def build_http_app(store: ConfigStore, mcp: FastMCP, svc: ZabbixService):
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(prog="zabbix-mcp", description="Zabbix 7.4 MCP server")
     ap.add_argument("command", nargs="?", default="serve",
-                    choices=["serve", "check", "set-admin-password", "create-token", "show-config"],
-                    help="serve (default) | check Zabbix connection | set-admin-password (reads stdin) | "
-                         "create-token | show-config")
+                    choices=["serve", "check", "init", "set-admin-password", "create-token", "show-config"],
+                    help="serve (default) | check Zabbix connection | init (write config from environment) | "
+                         "set-admin-password (reads stdin) | create-token | show-config")
+    ap.add_argument("--new-token", action="store_true", help="init: always create an MCP access token")
+    ap.add_argument("--admin-password-stdin", action="store_true", help="init: read admin password from stdin")
     ap.add_argument("--transport", choices=["stdio", "http"], help="override MCP_TRANSPORT")
     ap.add_argument("--host")
     ap.add_argument("--port", type=int)
@@ -103,13 +105,27 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 
 def _admin_password(store: ConfigStore) -> int:
+    import getpass
+
     from .admin.auth import check_password_strength, hash_password
-    pw = sys.stdin.readline().rstrip("\n") if not sys.stdin.isatty() else __import__("getpass").getpass("New admin password: ")
+    pw = getpass.getpass("New admin password: ") if sys.stdin.isatty() else sys.stdin.readline().rstrip("\n")
     if msg := check_password_strength(pw):
         print(msg, file=sys.stderr)
         return 2
     store.update({"admin_password_hash": hash_password(pw)})
     print("Admin password updated.", file=sys.stderr)
+    return 0
+
+
+def _init(store: ConfigStore, args: argparse.Namespace) -> int:
+    """Persist environment-provided settings to the config file (idempotent). Prints a new MCP
+    token on stdout when one is created; everything else goes to stderr."""
+    store.update(env_changes())
+    if args.admin_password_stdin and _admin_password(store) != 0:
+        return 2
+    if args.new_token or not store.settings.mcp_token_hashes:
+        print(store.add_mcp_token())
+    print(f"Configuration written to {store.path}", file=sys.stderr)
     return 0
 
 
@@ -132,6 +148,8 @@ def main(argv: list[str] | None = None) -> int:
         s = store.settings
         if cmd == "check":
             return asyncio.run(_check(store))
+        if cmd == "init":
+            return _init(store, args)
         if cmd == "set-admin-password":
             return _admin_password(store)
         if cmd == "create-token":

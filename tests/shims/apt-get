@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+echo "apt-get $*" >>"${SHIM_DIR:?}/docker.log"; exit 0

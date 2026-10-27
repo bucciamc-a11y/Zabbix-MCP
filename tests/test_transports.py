@@ -74,3 +74,26 @@ async def test_stdio_stdout_is_clean_protocol(tmp_path):
         assert any(t.name == "get_server_status" for t in tools.tools)
         res = await s.call_tool("zabbix_describe_method", {"method": "host.get"})
         assert json.loads(res.content[0].text)["method"] == "host.get"
+
+
+def test_init_command_writes_config_and_prints_only_token(tmp_path):
+    import subprocess
+    env = {**os.environ, "DATA_DIR": str(tmp_path), "ZABBIX_URL": "https://zbx.example.com",
+           "ZABBIX_API_TOKEN": "tok-abc", "READ_ONLY": "false", "ADMIN_ENABLED": "true",
+           "MCP_PUBLIC_URL": "https://h.example.com/zabbix-mcp"}
+    r = subprocess.run([sys.executable, "-m", "zabbix_mcp.server", "init", "--admin-password-stdin"],
+                       input="a very long admin password\n", env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    token = r.stdout.strip()
+    assert token.startswith("zmcp_") and "\n" not in token
+    cfg = json.loads((tmp_path / "config.json").read_text())
+    assert cfg["read_only"] is False and cfg["admin_password_hash"].startswith("pbkdf2$")
+    assert hash_token(token) in cfg["mcp_token_hashes"] and token not in json.dumps(cfg)
+    # idempotent: second run keeps the existing token and prints nothing on stdout
+    r2 = subprocess.run([sys.executable, "-m", "zabbix_mcp.server", "init"], env=env,
+                        capture_output=True, text=True)
+    assert r2.returncode == 0 and r2.stdout == ""
+    assert json.loads((tmp_path / "config.json").read_text())["mcp_token_hashes"] == [hash_token(token)]
+    r3 = subprocess.run([sys.executable, "-m", "zabbix_mcp.server", "init", "--admin-password-stdin"],
+                        input="short\n", env=env, capture_output=True, text=True)
+    assert r3.returncode == 2

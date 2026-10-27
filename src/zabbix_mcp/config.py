@@ -131,6 +131,12 @@ def settings_from_env(env: dict[str, str] | None = None) -> Settings:
     return s
 
 
+def env_changes(env: dict[str, str] | None = None) -> dict[str, Any]:
+    """Settings explicitly present in the environment (used by `zabbix-mcp init`)."""
+    env = os.environ if env is None else env
+    return {name: _coerce(name, env[var]) for var, name in _ENV.items() if env.get(var) not in (None, "")}
+
+
 class ConfigStore:
     """Thread-safe settings holder with cheap hot reload (stat on mtime) and atomic save."""
 

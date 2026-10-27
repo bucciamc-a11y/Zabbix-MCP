@@ -1,0 +1,66 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen
+      - run: uv run ruff check src tests scripts
+      - run: uv run pytest -q
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck jq
+          shellcheck -x install.sh deploy/zabbix-mcp-ctl
+
+  docker:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t zabbix-mcp:ci .
+      - name: Container smoke test (hardened runtime flags as installed)
+        run: |
+          mkdir -p data && sudo chown 10001:10001 data && sudo chmod 700 data
+          printf 'ZABBIX_URL=https://zbx.invalid\nZABBIX_API_TOKEN=x\nADMIN_ENABLED=true\n' > init.env
+          TOKEN=$(printf 'a long admin password\n' | docker run --rm -i --user 10001:10001 --read-only \
+            -v "$PWD/data:/data" --env-file init.env zabbix-mcp:ci init --admin-password-stdin)
+          docker run -d --name zmcp --user 10001:10001 --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true --tmpfs /tmp -v "$PWD/data:/data" -p 8000:8000 zabbix-mcp:ci
+          for i in $(seq 1 30); do curl -fsS localhost:8000/healthz && break; sleep 1; done
+          curl -fsS localhost:8000/healthz
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:8000/mcp)" = 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:8000/mcp \
+            -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+            -H "Authorization: Bearer $TOKEN" \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}')" = 200
+          curl -fsS localhost:8000/admin | grep -q "Zabbix MCP"
+          docker logs zmcp 2>&1 | tail -5
+          docker inspect -f '{{.State.Health.Status}}' zmcp
+
+  contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen
+      - name: Start Zabbix 7.4 (postgres + server + web)
+        run: |
+          docker network create zbx
+          docker run -d --name pg --network zbx -e POSTGRES_USER=zabbix -e POSTGRES_PASSWORD=zabbix -e POSTGRES_DB=zabbix postgres:16-alpine
+          docker run -d --name zserver --network zbx -e DB_SERVER_HOST=pg -e POSTGRES_USER=zabbix -e POSTGRES_PASSWORD=zabbix -e POSTGRES_DB=zabbix zabbix/zabbix-server-pgsql:alpine-7.4-latest
+          docker run -d --name zweb --network zbx -p 8080:8080 -e ZBX_SERVER_HOST=zserver -e DB_SERVER_HOST=pg -e POSTGRES_USER=zabbix -e POSTGRES_PASSWORD=zabbix -e POSTGRES_DB=zabbix zabbix/zabbix-web-nginx-pgsql:alpine-7.4-latest
+          for i in $(seq 1 90); do curl -fsS -X POST localhost:8080/api_jsonrpc.php -H 'Content-Type: application/json-rpc' -d '{"jsonrpc":"2.0","method":"apiinfo.version","params":{},"id":1}' | grep -q '"7.4' && break; sleep 4; done
+      - name: Create API token and run live checks
+        run: |
+          SESSION=$(curl -fsS -X POST localhost:8080/api_jsonrpc.php -H 'Content-Type: application/json-rpc' -d '{"jsonrpc":"2.0","method":"user.login","params":{"username":"Admin","password":"zabbix"},"id":1}' | jq -r .result)
+          curl -fsS -X POST localhost:8080/api_jsonrpc.php -H 'Content-Type: application/json-rpc' -H "Authorization: Bearer $SESSION" -d '{"jsonrpc":"2.0","method":"token.create","params":{"name":"ci","userid":"1"},"id":1}' | tee /tmp/tc.json
+          TID=$(jq -r '.result.tokenids[0]' /tmp/tc.json)
+          API=$(curl -fsS -X POST localhost:8080/api_jsonrpc.php -H 'Content-Type: application/json-rpc' -H "Authorization: Bearer $SESSION" -d "{\"jsonrpc\":\"2.0\",\"method\":\"token.generate\",\"params\":[\"$TID\"],\"id\":1}" | jq -r '.result[0].token')
+          sleep 60   # let the server collect its own first items
+          ZABBIX_URL=http://localhost:8080 ZABBIX_API_TOKEN=$API uv run python scripts/live_check.py --write

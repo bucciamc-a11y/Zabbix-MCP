@@ -16,7 +16,14 @@ dependencies = [
 zabbix-mcp = "zabbix_mcp.server:main"
 
 [dependency-groups]
-dev = ["pytest>=8", "pytest-asyncio>=0.23", "respx>=0.21", "ruff>=0.5"]
+dev = [
+    "pexpect>=4.9.0",
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "pyyaml>=6.0.3",
+    "respx>=0.21",
+    "ruff>=0.5",
+]
 
 [build-system]
 requires = ["hatchling"]
