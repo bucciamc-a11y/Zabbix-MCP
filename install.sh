@@ -539,7 +539,7 @@ print_client_info() {
     echo "Claude Desktop (claude_desktop_config.json, via mcp-remote):"
     echo "  {\"mcpServers\":{\"zabbix\":{\"command\":\"npx\",\"args\":[\"-y\",\"mcp-remote\",\"$url\",\"--header\",\"Authorization:\${ZABBIX_MCP_AUTH}\"],\"env\":{\"ZABBIX_MCP_AUTH\":\"Bearer $tok\"}}}}"
     echo
-    echo "Hermes, OpenClaw, Paperclip, ChatGPT desktop: see docs/CLIENTS.md in the repository."
+    echo "Hermes, OpenClaw, ChatGPT desktop: see docs/CLIENTS.md in the repository."
     echo
     echo "Delete this file after copying the token - it is not stored anywhere else in plain text."
   } >"$f"

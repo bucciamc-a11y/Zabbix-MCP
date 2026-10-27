@@ -88,11 +88,6 @@ MCP servers (known issue in some releases), send the token as `X-API-Key` where 
 `{"command":"npx","args":["-y","mcp-remote","<url>","--header","Authorization:${ZABBIX_MCP_AUTH}"],"env":{"ZABBIX_MCP_AUTH":"Bearer …"}}`.
 Skill: `cp -r skills/openclaw/zabbix-mcp <workspace>/skills/` (highest precedence) or `~/.agents/skills/`.
 
-## Paperclip
-Paperclip agents run through an adapter (Claude Code, Codex, OpenClaw, …); the MCP connection is configured on that
-adapter's runtime, so use the matching section above for the agent's runtime, then give agents the skill:
-Company → Skills → import `skills/zabbix-mcp` (from this repo's GitHub URL) and assign it to the agents that should
-use it. Give monitoring agents a **read-only** token/server and keep write access to a few trusted agents.
 
 ## Least privilege tips
 * Create one token per harness (admin UI → Tokens) so you can revoke individually.

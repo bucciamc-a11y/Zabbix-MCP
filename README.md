@@ -1,7 +1,7 @@
 # Zabbix-MCP
 
 A production-oriented [Model Context Protocol](https://modelcontextprotocol.io) server for **Zabbix 7.4**. It lets
-agent harnesses (Claude Desktop/Code, ChatGPT/Codex, Hermes, OpenClaw, Paperclip, Cursor…) triage problems, query
+agent harnesses (Claude Desktop/Code, ChatGPT/Codex, Hermes, OpenClaw, Cursor…) triage problems, query
 metrics, manage maintenance and **build/edit dashboards**, with guardrails so an LLM cannot do damage by accident.
 
 * Python 3.11+, official `mcp` SDK (FastMCP), `httpx`, Streamable HTTP + stdio
@@ -29,8 +29,8 @@ See [docs/INSTALL.md](docs/INSTALL.md). Short version: `git clone … && sudo ./
 
 ## Connect your agent
 See [docs/CLIENTS.md](docs/CLIENTS.md) for Claude Desktop, Claude Code, ChatGPT desktop/Codex, Hermes, OpenClaw,
-Paperclip, Cursor. Skill files that teach agents the workflow live in [`skills/`](skills):
-`skills/zabbix-mcp` (generic/Claude/Paperclip), `skills/hermes/zabbix-mcp`, `skills/openclaw/zabbix-mcp`.
+Cursor. Skill files that teach agents the workflow live in [`skills/`](skills):
+`skills/zabbix-mcp` (generic/Claude), `skills/hermes/zabbix-mcp`, `skills/openclaw/zabbix-mcp`.
 
 ## Local development
 ```bash
