@@ -36,7 +36,7 @@ jobs:
           mkdir -p data && sudo chown 10001:10001 data && sudo chmod 700 data
           printf 'ZABBIX_URL=https://zbx.invalid\nZABBIX_API_TOKEN=x\nADMIN_ENABLED=true\n' > init.env
           TOKEN=$(printf 'a long admin password\n' | docker run --rm -i --user 10001:10001 --read-only \
-            -v "$PWD/data:/data" --env-file init.env zabbix-mcp:ci init --admin-password-stdin)
+            -v "$PWD/data:/data" --env-file init.env zabbix-mcp:ci init --admin-password-stdin 2>init.err) || { sed 's/^/::error::init: /' init.err; false; }
           docker run -d --name zmcp --user 10001:10001 --read-only --cap-drop ALL \
             --security-opt no-new-privileges:true --tmpfs /tmp -v "$PWD/data:/data" -p 8000:8000 zabbix-mcp:ci
           for i in $(seq 1 30); do curl -fsS localhost:8000/healthz && break; sleep 1; done
